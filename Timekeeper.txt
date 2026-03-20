@@ -1,0 +1,377 @@
+var Timekeeper = Timekeeper || (function () {
+    'use strict';
+
+    var checkInstall = function () {
+        var i;
+
+        state.Timekeeper = state.Timekeeper || {
+            now: 0,
+            timers: [],
+            nextId: 1
+        };
+
+        if (typeof state.Timekeeper.nextId !== 'number' || state.Timekeeper.nextId < 1) {
+            state.Timekeeper.nextId = 1;
+        }
+
+        for (i = 0; i < state.Timekeeper.timers.length; i++) {
+            if (typeof state.Timekeeper.timers[i].id !== 'number') {
+                state.Timekeeper.timers[i].id = state.Timekeeper.nextId++;
+            } else if (state.Timekeeper.timers[i].id >= state.Timekeeper.nextId) {
+                state.Timekeeper.nextId = state.Timekeeper.timers[i].id + 1;
+            }
+        }
+
+        log('Timekeeper ready');
+    };
+
+    var pad2 = function (n) {
+        n = parseInt(n, 10) || 0;
+        return (n < 10 ? '0' : '') + n;
+    };
+
+    var formatClock = function (totalMinutes) {
+        totalMinutes = Math.max(0, parseInt(totalMinutes, 10) || 0);
+
+        var day = Math.floor(totalMinutes / 1440),
+            rem = totalMinutes % 1440,
+            hour24 = Math.floor(rem / 60),
+            minute = rem % 60,
+            suffix = (hour24 >= 12 ? 'PM' : 'AM'),
+            hour12 = hour24 % 12;
+
+        if (hour12 === 0) {
+            hour12 = 12;
+        }
+
+        return 'Day ' + day + ', ' + hour12 + ':' + pad2(minute) + ' ' + suffix;
+    };
+
+    var formatDuration = function (totalMinutes) {
+        totalMinutes = Math.max(0, parseInt(totalMinutes, 10) || 0);
+
+        var days = Math.floor(totalMinutes / 1440),
+            rem = totalMinutes % 1440,
+            hours = Math.floor(rem / 60),
+            minutes = rem % 60,
+            parts = [];
+
+        if (days > 0) parts.push(days + 'd');
+        if (hours > 0 || days > 0) parts.push(hours + 'h');
+        parts.push(minutes + 'm');
+
+        return parts.join(' ');
+    };
+
+    var unitToMinutes = function (amount, unit) {
+        var a = parseInt(amount, 10),
+            u = String(unit || 'min').toLowerCase();
+
+        if (isNaN(a)) return null;
+        if (/^(m|min|mins|minute|minutes|round|rounds)$/.test(u)) return a;
+        if (/^(turn|turns)$/.test(u)) return a * 10;
+        if (/^(hour|hours|hr|hrs)$/.test(u)) return a * 60;
+        if (/^(day|days)$/.test(u)) return a * 1440;
+        return null;
+    };
+
+    var escapeHtml = function (s) {
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    };
+
+    var makeButton = function (label, command) {
+        return '<a href="' + escapeHtml(command) + '" ' +
+            'style="display:inline-block;background:#d9d9d9;border:1px solid #666;border-radius:4px;' +
+            'padding:3px 6px;margin:2px 2px 2px 0;color:#000;text-decoration:none;font-weight:bold;">' +
+            escapeHtml(label) + '</a>';
+    };
+
+    var sortTimers = function () {
+        state.Timekeeper.timers.sort(function (a, b) {
+            if (a.expiresAt !== b.expiresAt) {
+                return a.expiresAt - b.expiresAt;
+            }
+            return a.id - b.id;
+        });
+    };
+
+    var removeTimerById = function (id) {
+        var i;
+        for (i = 0; i < state.Timekeeper.timers.length; i++) {
+            if (state.Timekeeper.timers[i].id === id) {
+                return state.Timekeeper.timers.splice(i, 1)[0];
+            }
+        }
+        return null;
+    };
+
+    var getPlayerName = function (msg) {
+        var player = getObj('player', msg.playerid);
+
+        if (player && player.get('_displayname')) {
+            return player.get('_displayname');
+        }
+
+        return String(msg.who || 'Player').replace(/\s*\(GM\)\s*$/, '');
+    };
+
+    var purgeExpired = function () {
+        var now = state.Timekeeper.now,
+            active = [],
+            expired = [],
+            i,
+            t;
+
+        for (i = 0; i < state.Timekeeper.timers.length; i++) {
+            t = state.Timekeeper.timers[i];
+            if (t.expiresAt <= now) {
+                expired.push(t.label);
+            } else {
+                active.push(t);
+            }
+        }
+
+        state.Timekeeper.timers = active;
+        sortTimers();
+        return expired;
+    };
+
+    var showClock = function (changeText, expiredList) {
+        var html = '',
+            i,
+            remaining;
+
+        sortTimers();
+
+        html += '<div style="border:1px solid #444;background:#fff;padding:6px 8px;">';
+        html += '<div style="font-weight:bold;font-size:1.1em;margin-bottom:4px;">Campaign Clock</div>';
+        html += '<div><b>Current:</b> ' + escapeHtml(formatClock(state.Timekeeper.now)) + '</div>';
+
+        if (changeText) {
+            html += '<div><b>Change:</b> ' + escapeHtml(changeText) + '</div>';
+        }
+
+        if (state.Timekeeper.timers.length) {
+            html += '<div style="margin-top:4px;"><b>Active Timers:</b></div>';
+            for (i = 0; i < state.Timekeeper.timers.length; i++) {
+                remaining = state.Timekeeper.timers[i].expiresAt - state.Timekeeper.now;
+                html += '<div>- ' + escapeHtml(state.Timekeeper.timers[i].label) +
+                    ' (' + formatDuration(remaining) + ' remaining)</div>';
+            }
+        } else {
+            html += '<div style="margin-top:4px;"><b>Active Timers:</b> none</div>';
+        }
+
+        if (expiredList && expiredList.length) {
+            html += '<div style="margin-top:4px;color:#8a1c1c;"><b>Expired:</b> ' +
+                escapeHtml(expiredList.join(', ')) + '</div>';
+        }
+
+        html += '</div>';
+
+        sendChat('Timekeeper', '/direct ' + html);
+    };
+
+    var showClearTimerMenu = function () {
+        var html = '',
+            i,
+            remaining,
+            t;
+
+        sortTimers();
+
+        html += '<div style="border:1px solid #444;background:#fff;padding:6px 8px;">';
+        html += '<div style="font-weight:bold;font-size:1.1em;margin-bottom:6px;">End Timer</div>';
+
+        if (!state.Timekeeper.timers.length) {
+            html += '<div>No active timers.</div>';
+        } else {
+            for (i = 0; i < state.Timekeeper.timers.length; i++) {
+                t = state.Timekeeper.timers[i];
+                remaining = Math.max(0, t.expiresAt - state.Timekeeper.now);
+
+                html += '<div style="margin-bottom:4px;">';
+                html += makeButton('End', '!time-clear-id ' + t.id);
+                html += ' ' + escapeHtml(t.label) + ' (' + formatDuration(remaining) + ' remaining)';
+                html += '</div>';
+            }
+        }
+
+        html += '</div>';
+
+        sendChat('Timekeeper', '/direct ' + html);
+    };
+
+    var showMenu = function () {
+        var html = '';
+
+        html += '<div style="border:1px solid #444;background:#fff;padding:6px 8px;">';
+        html += '<div style="font-weight:bold;font-size:1.1em;margin-bottom:6px;">Timekeeper Menu</div>';
+
+        html += '<div style="margin-bottom:4px;">';
+        html += makeButton('Refresh Menu', '!time-menu');
+        html += makeButton('Show Clock', '!time-show');
+        html += '</div>';
+
+        html += '<div style="margin-bottom:4px;">';
+        html += makeButton('Clear Timer Menu', '!time-clear-menu');
+        html += '</div>';
+
+        html += '<div style="margin-bottom:4px;">';
+        html += makeButton('+1 Round', '!time-advance 1 rounds');
+        html += makeButton('+1 Turn', '!time-advance 1 turns');
+        html += makeButton('+1 Hour', '!time-advance 1 hours');
+        html += makeButton('+1 Day', '!time-advance 1 days');
+        html += '</div>';
+
+        html += '<div style="margin-bottom:4px;">';
+        html += makeButton(
+            '+Custom Time',
+            '!time-advance ?{Amount?|10} ?{Unit?|Minutes,min|Rounds,round|Turns,turn|Hours,hour|Days,day}'
+        );
+        html += '</div>';
+
+        html += '<div style="margin-bottom:4px;">';
+        html += makeButton(
+            'Add Timer',
+            '!time-timer ?{Item?|Torch} | ?{Amount?|60} | ?{Unit?|Minutes,min|Rounds,round|Turns,turn|Hours,hour|Days,day}'
+        );
+        html += '</div>';
+
+        html += '<div style="margin-bottom:4px;">';
+        html += makeButton('Set Clock', '!time-set ?{Day?|0} ?{Hour?|8} ?{Minute?|0}');
+        html += makeButton('Reset Clock', '!time-reset');
+        html += '</div>';
+
+        html += '<div style="margin-top:6px;font-size:0.9em;color:#555;">';
+        html += 'Player timers are labeled with the player name.';
+        html += '</div>';
+
+        html += '</div>';
+
+        sendChat('Timekeeper', '/direct ' + html);
+    };
+
+    var handleInput = function (msg) {
+        var parts, amount, unit, rest, timerBits, timerLabel, expired, timerId, removedTimer, playerName;
+
+        if (msg.type !== 'api') return;
+
+        if (msg.content === '!time-menu') {
+            showMenu();
+            return;
+        }
+
+        if (msg.content === '!time-show') {
+            showClock();
+            return;
+        }
+
+        if (msg.content === '!time-clear-menu') {
+            showClearTimerMenu();
+            return;
+        }
+
+        if (msg.content.indexOf('!time-advance ') === 0) {
+            parts = msg.content.split(/\s+/);
+            amount = parts[1];
+            unit = parts[2];
+
+            amount = unitToMinutes(amount, unit);
+            if (amount === null) {
+                sendChat('Timekeeper', '/w "' + msg.who + '" Invalid time unit.');
+                return;
+            }
+
+            state.Timekeeper.now += amount;
+            expired = purgeExpired();
+            showClock('Advanced ' + formatDuration(amount), expired);
+            return;
+        }
+
+        if (msg.content.indexOf('!time-set ') === 0) {
+            parts = msg.content.split(/\s+/);
+            state.Timekeeper.now = (parseInt(parts[1], 10) * 1440) +
+                                   (parseInt(parts[2], 10) * 60) +
+                                   parseInt(parts[3], 10);
+            expired = purgeExpired();
+            showClock('Clock set', expired);
+            return;
+        }
+
+        if (msg.content.indexOf('!time-timer ') === 0) {
+            rest = msg.content.replace('!time-timer ', '');
+            timerBits = rest.split(/\s*\|\s*/);
+
+            if (timerBits.length < 3) {
+                sendChat('Timekeeper', '/w "' + msg.who + '" Use: !time-timer Item | Amount | Unit');
+                return;
+            }
+
+            amount = unitToMinutes(timerBits[1], timerBits[2]);
+            if (amount === null || amount <= 0) {
+                sendChat('Timekeeper', '/w "' + msg.who + '" Invalid timer duration.');
+                return;
+            }
+
+            playerName = getPlayerName(msg);
+            timerLabel = playerName + ': ' + timerBits[0];
+
+            state.Timekeeper.timers.push({
+                id: state.Timekeeper.nextId++,
+                label: timerLabel,
+                expiresAt: state.Timekeeper.now + amount
+            });
+
+            sortTimers();
+            showClock('Added timer: ' + timerLabel + ' (' + formatDuration(amount) + ')');
+            return;
+        }
+
+        if (msg.content.indexOf('!time-clear-id ') === 0) {
+            timerId = parseInt(msg.content.replace('!time-clear-id ', ''), 10);
+
+            if (isNaN(timerId)) {
+                sendChat('Timekeeper', '/w "' + msg.who + '" Invalid timer selection.');
+                return;
+            }
+
+            removedTimer = removeTimerById(timerId);
+
+            if (!removedTimer) {
+                sendChat('Timekeeper', '/w "' + msg.who + '" That timer no longer exists. Open Clear Timer Menu again.');
+                return;
+            }
+
+            showClock('Cleared timer: ' + removedTimer.label);
+            return;
+        }
+
+        if (msg.content === '!time-reset') {
+            state.Timekeeper.now = 0;
+            state.Timekeeper.timers = [];
+            showClock('Clock reset');
+            return;
+        }
+    };
+
+    var registerEventHandlers = function () {
+        on('chat:message', handleInput);
+    };
+
+    return {
+        CheckInstall: checkInstall,
+        RegisterEventHandlers: registerEventHandlers
+    };
+}());
+
+on('ready', function () {
+    'use strict';
+    Timekeeper.CheckInstall();
+    Timekeeper.RegisterEventHandlers();
+});
